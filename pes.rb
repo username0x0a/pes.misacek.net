@@ -1,9 +1,26 @@
 #!/usr/bin/env ruby
 
 require 'net/https'
+require 'json'
 require 'fileutils'
 require 'pp'
-require 'json'
+
+class String
+	def getValue(*args)
+		throw :too_few_arguments if args.size < 1
+		patterns = args[0..-2]
+		terminator = args[-1]
+		start = 0
+		end_ = 0
+		patterns.each do|pattern|
+			start = self.index(pattern, start)
+			start += pattern.length
+		end
+		end_ = terminator == :eol || terminator == nil ?
+			-1 : self.index(terminator, start) - 1
+		return self[start..end_]
+	end
+end
 
 $ratings = {
 	:green  => { :min =>  0, :max =>  20, :severity => 1 },
@@ -21,81 +38,66 @@ def ratingForIndex(idx)
 	return $ratings[:green][:severity]
 end
 
-today = Time.new().to_s.split(" ").first
-filesURI = 'https://share.uzis.cz/s/BRfppYFpNTddAy4/download?path=%2F&files='
+today = Time.new.to_s.split(" ").first
+filterToday = today.split('-').reverse.join('.')
 
-csv = Net::HTTP.get(URI(filesURI + 'pes_CR.csv')).force_encoding('UTF-8')
-csv = csv.split("\n").select {|l| l.index(today) != nil }
+data = Net::HTTP.get(URI('https://flo.uri.sh/visualisation/4366507/embed'))
+data = data.getValue '_Flourish_data = ', ';'
+json = JSON.parse data
+data = json['data']
+data = data.select {|e| e['label'] == filterToday }
 
-overall_idx = nil
-overall_rat = nil
-overall_er = nil
+throw 'Overall data error' if data.count != 15
 
-csv.each{|line|
+regions = data.map {|e| e['filter'] }
 
-	data = line.split ';'
-	next if data.count != 15
-
-	overall_idx = data[2].to_i
-	overall_rat = ratingForIndex overall_idx
-	overall_er = data[9].to_f
+ids = {
+	"Celá ČR" => "CZ000",
+	"Hl. m. Praha" => "CZ010",
+	"Středočeský kraj" => "CZ020",
+	"Jihočeský kraj" => "CZ031",
+	"Plzeňský kraj" => "CZ032",
+	"Karlovarský kraj" => "CZ041",
+	"Ústecký kraj" => "CZ042",
+	"Liberecký kraj" => "CZ051",
+	"Královéhradecký kraj" => "CZ052",
+	"Pardubický kraj" => "CZ053",
+	"Kraj Vysočina" => "CZ063",
+	"Jihomoravský kraj" => "CZ064",
+	"Olomoucký kraj" => "CZ071",
+	"Zlínský kraj" => "CZ072",
+	"Moravskoslezský kraj" => "CZ080",
 }
 
-throw 'Overall data error' if overall_idx == nil || overall_er == nil
-
-output = { }
-
-csv = Net::HTTP.get(URI(filesURI + 'pes_kraje.csv')).force_encoding('UTF-8')
-csv = csv.split("\n").select {|l| l.index(today) != nil }
-
-throw 'Bad shires count' if csv.count != 14
-
-csv.each{|line|
-
-	data = line.split ';'
-	next if data.count != 17
-
-	shire_id = data[2]
-	shire_name = data[3]
-	idx = data[4].to_i
-	rat = ratingForIndex idx
-	er = data[11].to_f
-
-	# puts "#{area_name}: #{idx} (#{er})"
-
-	shire = { :id => shire_id, :name => shire_name, :index => idx, :r_value => er, :_rating => rat, :areas => { } }
-	output[shire_id] = shire
+data = data.map {|e|
+	id = ids[e['filter']]
+	throw "Invalid region" if !id.is_a? String
+	idx = e['value'][0].to_i
+	region = {
+		:id => id,
+		:name => e['filter'],
+		:index => idx,
+		:r_value => e['value'][1].to_f,
+		:_rating => ratingForIndex(idx),
+		:areas => {},
+	}
+	region
 }
 
-csv = Net::HTTP.get(URI(filesURI + 'pes_okresy.csv')).force_encoding('UTF-8')
-csv = csv.split("\n").select {|l| l.index(today) != nil }
+countryData = data[0]
+data.shift
 
-exit(0) if csv.count < 10
+data = data.reduce({}) { |obj, elm| obj[elm[:id]] = elm; obj }
 
-csv.each{|line|
-
-	data = line.split ';'
-	next if data.count != 19
-
-	day = data[1]
-	shire_id = data[2]
-	shire_name = data[3]
-	area_id = data[4]
-	area_name = data[5]
-	idx = data[6].to_i
-	rat = ratingForIndex idx
-	er = data[13].to_f
-
-	# puts "#{area_name}: #{idx} (#{er})"
-
-	shire = output[shire_id]
-	throw 'Shire not found' if shire == nil
-	shire[:areas][area_id] = { :id => area_id, :name => area_name, :index => idx, :r_value => er, :_rating => rat }
+output = {
+	:date => today,
+	:index => countryData[:index],
+	:r_value => countryData[:r_value],
+	:_rating => countryData[:_rating],
+	:_ratings => $ratings,
+	:data => data,
 }
 
-throw 'Data format has probably changed' if output.count < 5
-
-output = { :date => today, :index => overall_idx, :r_value => overall_er, :_rating => overall_rat, :_ratings => $ratings, :data => output }
 json = output.to_json + "\n" # JSON.pretty_generate(output)
 filename = 'pes.json'
 
