@@ -41,13 +41,16 @@ end
 today = Time.new.to_s.split(" ").first
 filterToday = today.split('-').reverse.join('.')
 
+data = `cat pes.json`
+exit(1) if data.index('"date":"'+today+'"') != nil
+
 data = Net::HTTP.get(URI('https://flo.uri.sh/visualisation/4366507/embed'))
 data = data.getValue '_Flourish_data = ', ';'
 json = JSON.parse data
 data = json['data']
 data = data.select {|e| e['label'] == filterToday }
 
-throw 'Overall data error' if data.count != 15
+exit(2) if data.count != 15
 
 regions = data.map {|e| e['filter'] }
 
@@ -101,7 +104,7 @@ output = {
 json = output.to_json + "\n" # JSON.pretty_generate(output)
 filename = 'pes.json'
 
-exit(0) if File.exists?(filename) && json == File.read(filename)
+exit(3) if File.exists?(filename) && json == File.read(filename)
 
 FileUtils.rm filename if File.exists? filename
 File.open(filename, 'w'){|f| f << json }
